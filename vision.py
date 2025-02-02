@@ -20,9 +20,24 @@ import os
 import re
 import requests
 from groq import Groq
+from langsmith import traceable
 
 # The model identifier for the Groq Vision API
 MODEL_ID = "llama-3.2-90b-vision-preview"
+
+# Retrieve the API key from environment variables
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+# Define the expected output format for product descriptions
+# This format specifies that responses should be JSON with two fields:
+# - product_name: A text field containing the name of the product
+# - description: A text field containing the product description
+OUTPUT_FORMAT = """
+{
+  "product_name": "text",
+  "description": "text"
+}
+"""
 
 
 def encode_image(image_source):
@@ -71,41 +86,43 @@ def encode_image(image_source):
             return base64.b64encode(image_file.read()).decode("utf-8")
 
 
-# Retrieve the API key from environment variables
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+@traceable
+def pipeline(image_source: str):
+    # Initialize the Groq client with the API key
+    client = Groq(api_key=GROQ_API_KEY)
+    base64_image = encode_image(image_source)
 
-# Initialize the Groq client with the API key
-client = Groq(api_key=GROQ_API_KEY)
-base64_image = encode_image(
-    "https://m.media-amazon.com/images/I/61PkbgkViUL._AC_SY879_.jpg"
-)
+    completion = client.chat.completions.create(
+        model=MODEL_ID,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Generates product descriptions for this item image. output should be a JSON in this format: {OUTPUT_FORMAT}",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                    },
+                ],
+            },
+        ],
+        temperature=1,
+        max_completion_tokens=1024,
+        top_p=1,
+        stream=False,
+        stop=None,
+    )
 
-OUTPUT_FORMAT = """
-    *Product Name*
-    *Description*
-"""
-completion = client.chat.completions.create(
-    model=MODEL_ID,
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Generates product descriptions for this item image.",
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                },
-            ],
-        },
-    ],
-    temperature=1,
-    max_completion_tokens=1024,
-    top_p=1,
-    stream=False,
-    stop=None,
-)
+    return completion
 
-print(completion.choices[0].message.content)
+
+if __name__ == "__main__":
+    # IMG_URL = "https://i.ebayimg.com/thumbs/images/g/y8QAAOSwMttkPN7Z/s-l500.jpg" # The image was used to test NSFW images
+    IMG_URL = "https://i.ebayimg.com/images/g/XzoAAOSwtMVnhCyw/s-l1600.webp"
+    response = pipeline(IMG_URL)
+    print(f"Number of choices: {len(response.choices)}")
+    print("Model: " + response.model)
+    print("First model response: " + response.choices[0].message.content)
